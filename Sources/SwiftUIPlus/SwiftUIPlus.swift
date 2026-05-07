@@ -17,7 +17,7 @@ public extension View {
     /// - Parameters:
     ///   - onAppear: 视图显示时触发（对应 viewDidAppear）
     ///   - onDisappear: 视图消失时触发（对应 viewDidDisappear，包含被覆盖或被销毁）
-    ///   - onDestroy: 仅在视图真正从导航栈 Pop 或被 Dismiss 销毁时触发
+    ///   - onDestroy: 仅在视图真正从导航栈 Pop / 被 Dismiss / 条件切换销毁时触发
     ///   - onEvent: 原始生命周期事件回调，用于更精细的控制
     @MainActor
     func onLifecycle(
@@ -27,22 +27,22 @@ public extension View {
         onEvent: (@MainActor @Sendable (SwiftUIPlusLifecycleEvent) -> Void)? = nil
     ) -> some View {
         self.background(
-            LifecycleBridgeView(onEvent: { event in
-                // 在主线程执行回调
-                onEvent?(event)
-                
-                switch event {
-                case .viewDidAppear:
-                    onAppear?()
-                case .viewDidDisappear(let isRemoving):
-                    onDisappear?()
-                    if isRemoving {
-                        onDestroy?()
+            LifecycleBridgeView(
+                onEvent: { event in
+                    onEvent?(event)
+                    switch event {
+                    case .viewDidAppear:
+                        onAppear?()
+                    case .viewDidDisappear:
+                        onDisappear?()
+                    default:
+                        break
                     }
-                default:
-                    break
+                },
+                onDestroy: {
+                    onDestroy?()
                 }
-            })
+            )
             .accessibilityHidden(true)
         )
     }
@@ -53,13 +53,14 @@ public extension View {
 /// 底层桥接容器
 @MainActor
 private struct LifecycleBridgeView: UIViewControllerRepresentable {
-    /// 这里的闭包类型必须与 View 扩展中的定义严格一致，包含 @MainActor 和 @Sendable
     let onEvent: @MainActor @Sendable (SwiftUIPlusLifecycleEvent) -> Void
+    let onDestroy: @MainActor @Sendable () -> Void
 
     /// 协调器：标记为 @MainActor 确保与 UI 生命周期对齐
     @MainActor
     final class Coordinator {
         var onEvent: (@MainActor @Sendable (SwiftUIPlusLifecycleEvent) -> Void)?
+        var onDestroy: (@MainActor @Sendable () -> Void)?
     }
 
     func makeCoordinator() -> Coordinator {
@@ -69,7 +70,6 @@ private struct LifecycleBridgeView: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> LifecycleSpyViewController {
         let controller = LifecycleSpyViewController()
         controller.onEvent = { [weak coordinator = context.coordinator] event in
-            // SpyViewController 会在主线程触发，通知 Coordinator
             coordinator?.onEvent?(event)
         }
         return controller
@@ -77,13 +77,39 @@ private struct LifecycleBridgeView: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: LifecycleSpyViewController, context: Context) {
         context.coordinator.onEvent = onEvent
+        context.coordinator.onDestroy = onDestroy
+    }
+
+    /// SwiftUI 把桥接视图从层级中移除时调用，这是「视图被销毁」最权威的信号：
+    /// 覆盖 NavigationStack pop、sheet dismiss、if 条件切换等所有场景。
+    static func dismantleUIViewController(_ uiViewController: LifecycleSpyViewController, coordinator: Coordinator) {
+        MainActor.assumeIsolated {
+            coordinator.onDestroy?()
+            coordinator.onDestroy = nil
+            coordinator.onEvent = nil
+        }
     }
 }
 
 /// 真正的 UIKit 间谍
 private final class LifecycleSpyViewController: UIViewController {
-    /// 注意：这里的回调也要保持一致
     var onEvent: (@MainActor @Sendable (SwiftUIPlusLifecycleEvent) -> Void)?
+
+    /// isMovingFromParent / isBeingDismissed 在 viewDidDisappear 时已被 UIKit 重置，
+    /// 必须在 viewWillDisappear 阶段提前捕获。
+    /// 同时由于本 VC 是 UIHostingController 的子 VC，需向上检查 parent 的状态。
+    private var pendingIsRemoving = false
+
+    private var isBeingRemovedFromStack: Bool {
+        var vc: UIViewController? = self
+        while let current = vc {
+            if current.isMovingFromParent || current.isBeingDismissed {
+                return true
+            }
+            vc = current.parent
+        }
+        return false
+    }
 
     init() {
         super.init(nibName: nil, bundle: nil)
@@ -113,13 +139,12 @@ private final class LifecycleSpyViewController: UIViewController {
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        let isRemoving = isMovingFromParent || isBeingDismissed
-        onEvent?(.viewWillDisappear(isRemoving: isRemoving))
+        pendingIsRemoving = isBeingRemovedFromStack
+        onEvent?(.viewWillDisappear(isRemoving: pendingIsRemoving))
     }
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
-        let isRemoving = isMovingFromParent || isBeingDismissed
-        onEvent?(.viewDidDisappear(isRemoving: isRemoving))
+        onEvent?(.viewDidDisappear(isRemoving: pendingIsRemoving))
     }
 }

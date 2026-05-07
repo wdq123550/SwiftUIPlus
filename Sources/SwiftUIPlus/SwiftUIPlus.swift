@@ -13,37 +13,58 @@ public enum SwiftUIPlusLifecycleEvent: Sendable {
 }
 
 public extension View {
-    /// 监听 SwiftUI 视图对应的底层 UIKit 生命周期
-    /// - Parameters:
-    ///   - onAppear: 视图显示时触发（对应 viewDidAppear）
-    ///   - onDisappear: 视图消失时触发（对应 viewDidDisappear，包含被覆盖或被销毁）
-    ///   - onDestroy: 仅在视图真正从导航栈 Pop / 被 Dismiss / 条件切换销毁时触发
-    ///   - onEvent: 原始生命周期事件回调，用于更精细的控制
+    /// 视图显示时触发（对应 UIKit 的 `viewDidAppear`）
     @MainActor
-    func onLifecycle(
-        onAppear: (@MainActor @Sendable () -> Void)? = nil,
-        onDisappear: (@MainActor @Sendable () -> Void)? = nil,
-        onDestroy: (@MainActor @Sendable () -> Void)? = nil,
-        onEvent: (@MainActor @Sendable (SwiftUIPlusLifecycleEvent) -> Void)? = nil
+    func onLifecycleAppear(
+        _ action: @escaping @MainActor @Sendable () -> Void
+    ) -> some View {
+        attachLifecycle(
+            onEvent: { event in
+                if case .viewDidAppear = event { action() }
+            }
+        )
+    }
+
+    /// 视图消失时触发（对应 UIKit 的 `viewDidDisappear`，包含被覆盖或被销毁两种情况）
+    @MainActor
+    func onLifecycleDisappear(
+        _ action: @escaping @MainActor @Sendable () -> Void
+    ) -> some View {
+        attachLifecycle(
+            onEvent: { event in
+                if case .viewDidDisappear = event { action() }
+            }
+        )
+    }
+
+    /// 视图真正被销毁时触发（NavigationStack pop / sheet dismiss / 条件切换等）
+    @MainActor
+    func onLifecycleDestroy(
+        _ action: @escaping @MainActor @Sendable () -> Void
+    ) -> some View {
+        attachLifecycle(onDestroy: action)
+    }
+
+    /// 监听原始的生命周期事件，可用于更精细的控制
+    @MainActor
+    func onLifecycleEvent(
+        _ action: @escaping @MainActor @Sendable (SwiftUIPlusLifecycleEvent) -> Void
+    ) -> some View {
+        attachLifecycle(onEvent: action)
+    }
+}
+
+// MARK: - Internal Helpers
+
+private extension View {
+    @MainActor
+    func attachLifecycle(
+        onEvent: (@MainActor @Sendable (SwiftUIPlusLifecycleEvent) -> Void)? = nil,
+        onDestroy: (@MainActor @Sendable () -> Void)? = nil
     ) -> some View {
         self.background(
-            LifecycleBridgeView(
-                onEvent: { event in
-                    onEvent?(event)
-                    switch event {
-                    case .viewDidAppear:
-                        onAppear?()
-                    case .viewDidDisappear:
-                        onDisappear?()
-                    default:
-                        break
-                    }
-                },
-                onDestroy: {
-                    onDestroy?()
-                }
-            )
-            .accessibilityHidden(true)
+            LifecycleBridgeView(onEvent: onEvent, onDestroy: onDestroy)
+                .accessibilityHidden(true)
         )
     }
 }
@@ -53,8 +74,8 @@ public extension View {
 /// 底层桥接容器
 @MainActor
 private struct LifecycleBridgeView: UIViewControllerRepresentable {
-    let onEvent: @MainActor @Sendable (SwiftUIPlusLifecycleEvent) -> Void
-    let onDestroy: @MainActor @Sendable () -> Void
+    let onEvent: (@MainActor @Sendable (SwiftUIPlusLifecycleEvent) -> Void)?
+    let onDestroy: (@MainActor @Sendable () -> Void)?
 
     /// 协调器：标记为 @MainActor 确保与 UI 生命周期对齐
     @MainActor
@@ -80,7 +101,7 @@ private struct LifecycleBridgeView: UIViewControllerRepresentable {
         context.coordinator.onDestroy = onDestroy
     }
 
-    /// SwiftUI 把桥接视图从层级中移除时调用，这是「视图被销毁」最权威的信号：
+    /// SwiftUI 把桥接视图从层级中移除时调用，是「视图被销毁」最权威的信号：
     /// 覆盖 NavigationStack pop、sheet dismiss、if 条件切换等所有场景。
     static func dismantleUIViewController(_ uiViewController: LifecycleSpyViewController, coordinator: Coordinator) {
         MainActor.assumeIsolated {

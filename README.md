@@ -15,7 +15,7 @@
 Swift Package Manager：
 
 ```swift
-.package(url: "https://github.com/<your-org>/SwiftUIPlus.git", from: "0.1.0")
+.package(url: "https://github.com/wdq123550/SwiftUIPlus.git", from: "0.1.0")
 ```
 
 然后在 target 里依赖：

@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-// MARK: - Public API
+// MARK: Public API
 
 /// 定义视图生命周期的事件类型
 public enum SwiftUIPlusLifecycleEvent: Sendable {
@@ -58,9 +58,17 @@ public extension View {
     ) -> some View {
         attachLifecycle(onEvent: action)
     }
+
+    /// 视图仅在「首次出现」时执行一次 action（参照 SwiftUIX 的 onAppearOnce 实现）
+    /// 与系统 `onAppear` 的区别：系统 `onAppear` 每次重新可见都会触发,此方法通过内联 `@State` 记录标志位,保证 action 只执行一次
+    @MainActor
+    func onAppearOnce(perform action: @escaping () -> Void) -> some View {
+        // 用一个持有 @State 的内联包装视图承载「是否已出现」的标志位,SwiftUIX 借助 withInlineState 达到同样效果
+        InlineAppearOnceView(content: self, action: action)
+    }
 }
 
-// MARK: - Internal Helpers
+// MARK: Internal Helpers
 
 private extension View {
     /// 在视图背景挂载一个不可见、不参与命中测试的桥接视图,用来转发生命周期
@@ -77,7 +85,27 @@ private extension View {
     }
 }
 
-// MARK: - Internal Implementation
+// MARK: Internal Implementation
+
+/// onAppearOnce 的内联状态包装视图：用 @State 记录标志位,确保 action 仅在首次出现时执行一次
+@MainActor
+private struct InlineAppearOnceView<Content: View>: View {
+    /// 被包装的原始视图
+    let content: Content
+    /// 首次出现时执行的回调
+    let action: () -> Void
+    /// 标记视图是否已经出现过,避免重复执行 action
+    @State private var didAppear = false
+
+    var body: some View {
+        content.onAppear {
+            // 已经出现过则直接返回,不再执行 action
+            guard !didAppear else { return }
+            action()
+            didAppear = true
+        }
+    }
+}
 
 /// 底层桥接容器
 @MainActor
@@ -90,6 +118,9 @@ private struct LifecycleBridgeView: UIViewControllerRepresentable {
     /// 协调器：标记为 @MainActor 确保与 UI 生命周期对齐
     @MainActor
     final class Coordinator {
+
+        // MARK: - Stored properties
+
         /// 最新的事件回调,由 update 阶段刷新
         var onEvent: (@MainActor @Sendable (SwiftUIPlusLifecycleEvent) -> Void)?
         /// 最新的销毁回调,由 update 阶段刷新

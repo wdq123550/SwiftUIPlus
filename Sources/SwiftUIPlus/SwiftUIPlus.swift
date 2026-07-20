@@ -59,10 +59,11 @@ public extension View {
         attachLifecycle(onEvent: action)
     }
 
-    /// 视图仅在「首次出现」时执行一次 action（参照 SwiftUIX 的 onAppearOnce 实现）
+    /// 视图仅在「首次出现」时执行一次 action
     /// 与系统 `onAppear` 的区别：系统 `onAppear` 每次重新可见都会触发,此方法通过内联 `@State` 记录标志位,保证 action 只执行一次
+    /// 命名为 `onFirstAppear` 以避免与 SwiftUIX 的 `onAppearOnce` 同名冲突（同时引入两库时会产生歧义）
     @MainActor
-    func onAppearOnce(perform action: @escaping () -> Void) -> some View {
+    func onFirstAppear(perform action: @escaping () -> Void) -> some View {
         // 用一个持有 @State 的内联包装视图承载「是否已出现」的标志位,SwiftUIX 借助 withInlineState 达到同样效果
         InlineAppearOnceView(content: self, action: action)
     }

@@ -82,15 +82,15 @@ public struct LineBreak {
 // MARK: - 5. 定义静态工厂方法
 /// 现在我们将静态方法放在具体的 LineBreak 上，而不是协议扩展里
 public extension LineBreak {
-    static func oneLine(maxWidth: CGFloat, alignment: TextAlignment = .leading, minScale: CGFloat = 0.1) -> LineBreak {
+    static func oneLine(maxWidth: CGFloat, alignment: TextAlignment = .center, minScale: CGFloat = 0.1) -> LineBreak {
         LineBreak(OneLineBreakStyle(maxWidth: maxWidth, minimumScaleFactor: minScale, alignment: alignment))
     }
 
-    static func limit(maxWidth: CGFloat, line: Int, alignment: TextAlignment = .leading, minScale: CGFloat = 0.1) -> LineBreak {
+    static func limit(maxWidth: CGFloat, line: Int, alignment: TextAlignment = .center, minScale: CGFloat = 0.1) -> LineBreak {
         LineBreak(LimitLineBreakStyle(lineLimit: line, alignment: alignment, maxWidth: maxWidth, minimumScaleFactor: minScale))
     }
 
-    static func infinity(maxWidth: CGFloat, alignment: TextAlignment = .leading) -> LineBreak {
+    static func infinity(maxWidth: CGFloat, alignment: TextAlignment = .center) -> LineBreak {
         LineBreak(InfinityLineBreakStyle(alignment: alignment, maxWidth: maxWidth))
     }
 }

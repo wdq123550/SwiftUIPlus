@@ -2,77 +2,13 @@
 //  View+AnimationCompletion.swift
 //  SwiftUIPlus
 //
-//  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  【给后续 AI / 维护者】何时用本文件、绝不要再用 withAnimation completion 做业务
-//  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  稳妥的「动画真正画完」回调：跟随 SwiftUI 渲染时钟插值，而不是 withAnimation 的 completion 事务。
 //
-//  ## 问题是什么
-//
-//  系统 API：
-//      withAnimation(...) { 改状态 } completion: { 做业务 }
-//  以及 iOS 17 的：
-//      withAnimation(..., completionCriteria: .logicallyComplete / .removed) { } completion: { }
-//
-//  这里的 completion **挂在动画事务（Transaction）上**，不是挂在「某一层 View 真正画完」上。
-//  文档虽写「保证回调一次」，完成标准仍是事务语义（logicallyComplete / removed），
-//  **不是**「跟某 View 的 animatableData 渲染进度走」。
-//
-//  ## 真实故障长什么样（FurFriends 识别解锁弹窗，2026-08）
-//
-//  场景：识别页看完激励广告（含金手指秒跳）→ 同一拍里：
-//    1) 识别结果页从锁定态大变样成正式结果（requestStatus = .return，整页重建）
-//    2) PopupPresenter 用 withAnimation 弹出奖励框
-//  弹窗与识别页在同一棵 SwiftUI 树（MainView 上的 overlay），共享同一次刷新。
-//
-//  现象：
-//    - 奖励弹窗已经出现在屏幕上
-//    - 但 appearCallBack 不来 → 抽奖券 bar / 飞入动画 / canClose 全不启动
-//    - 点 Got it! / 关闭按钮没反应（业务门闩还没打开）
-//    - 再点一下屏幕，completion 才补调，一切突然正常
-//
-//  根因：同拍大重建可能在原动画事务之外重新提交终点状态，把在飞动画掐断；
-//  动画「不算逻辑完成」→ completion 不结算 → 挂在上面的业务停摆。
-//  参考：https://fatbobman.com/posts/debugging-notes-on-two-swiftui-animation-bugs/
-//  （Bug 1：显式 withAnimation 被父视图重建打断；改用隐式 .animation + Animatable 收尾）
-//
-//  ## 错误替代方案（不要用）
-//
-//  1. Task.sleep / asyncAfter(动画时长)
-//     → 挂钟计时。主线程被 WebView / H5 SDK 拖卡时，时间到了画面还没画完，
-//       回调会提前打出（弹窗内飞行起点未上报 → 飞入动画被 guard 掉）。
-//  2. 在 onAppear 里立刻 startAppearFlow
-//     → 破坏「展示动画结束后才回调」的语义，飞券会和入场动画抢。
-//  3. 做成全局自由函数伪装 withAnimation { } completion:
-//     → 完成信号必须挂在视图树上；自由函数挂不进树，救不了事务被掐断。
-//  4. 指望 SwiftUIX
-//     → 查过源码：没有稳妥的动画完成 API（withAnimation+ 只是延迟执行）。
-//
-//  ## 正确做法（本文件）
-//
-//  1. 动画用隐式 `.animation(_:value:)` 声明在**动画真正发生的那层常驻 View** 上，
-//     不要用 withAnimation 包一层全局事务（动画归属到本层，少被外部重建牵连）。
-//  2. 完成信号用 Animatable 观察器盯 animatableData 是否到终点（跟渲染走）：
-//     - 动画被掐断、直接跳终点 → 立刻收到终值并回调（不挂死）
-//     - 主线程卡顿 → 跟着帧变慢（只会晚，不会早）
-//  3. 业务上「必须发生」的事（发奖、开按钮、弹窗队列推进、appearCallBack）
-//     只许挂本文件的回调；系统 completion 只许做纯装饰收尾。
-//
-//  ## API 怎么选
-//
-//  - 触发值 == 观察值（每次 token += 1）：用 `stableAnimation(_:value:onComplete:)`
-//  - 一条曲线 + 多个独立进度（弹窗出场 / 退场各一个 progress）：
-//      .onAnimationCompleted(for: appearProgress) { ... }
-//      .onAnimationCompleted(for: dismissProgress) { ... }
-//      .animation(activeAnimation, value: animationToken)
-//
-//  ## 硬规则（违反 = 立刻误报完成）
-//
-//  1. 观察器挂在**常驻**视图上，不能随被观察内容一起插入/移除
-//  2. 观察器必须在 `.animation(_:value:)` 的**内侧**（上游）
-//  3. 回调里用 DispatchQueue.main.async 派到下一拍（已在实现里写死）；
-//     不要改成 MainActor.run / Task { @MainActor }——渲染周期内可能同步执行或调度时机不对
-//
-//  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  为什么不直接用 withAnimation(_:completion:)：
+//  那个 completion 挂在动画事务上；业务页面同拍大重建时，SwiftUI 可能掐断在飞动画，
+//  completion 迟迟不结算，把发奖 / 开按钮 / 弹窗队列等业务一起拖死。
+//  本文件的观察器盯的是 animatableData 是否已经推到终点——动画被掐断跳终点时也会立刻回调，
+//  主线程卡顿时跟着帧变慢，只会晚、不会早。
 //
 
 import SwiftUI

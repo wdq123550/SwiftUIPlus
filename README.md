@@ -1,8 +1,12 @@
 # SwiftUIPlus
 
-一个轻量的 SwiftUI 生命周期补全库，桥接到 UIKit 的真实 `UIViewController` 生命周期，
-提供 `viewDidLoad / viewWillAppear / viewDidAppear / viewWillDisappear / viewDidDisappear`
-以及 SwiftUI 原生缺失的「视图真正被销毁」回调。
+一个轻量的 SwiftUI 能力补全库，目前包含两块：
+
+1. **生命周期**：桥接到 UIKit 真实 `UIViewController` 生命周期，提供
+   `viewDidLoad / viewWillAppear / viewDidAppear / viewWillDisappear / viewDidDisappear`
+   以及 SwiftUI 原生缺失的「视图真正被销毁」回调。
+2. **动画完成**：用 `Animatable` 跟随渲染插值，提供比 `withAnimation(_:completion:)`
+   更适合承接业务逻辑的「动画真正画完」回调。
 
 - 最低支持：**iOS 17**
 - 仅依赖 `SwiftUI` + `UIKit`，零第三方依赖
@@ -76,6 +80,60 @@ SomeView()
 | `onLifecycleDisappear { }` | `viewDidDisappear` | 被覆盖或被销毁都会触发 |
 | `onLifecycleDestroy { }` | `dismantleUIViewController` | SwiftUI 把视图从层级中拆除时触发 |
 | `onLifecycleEvent { event in }` | 全部事件 | 适合需要多事件 / 需要 `isRemoving` 标记的场景 |
+| `onFirstAppear { }` | 首次 `onAppear` | 用内联 `@State` 去重，只触发一次 |
+| `onAnimationCompleted(for:) { }` | `animatableData` 到达终点 | 稳妥的动画完成信号；须挂在 `.animation` **内侧** |
+| `stableAnimation(_:value:) { }` | 同上 | `onAnimationCompleted` + `.animation` 的组合便捷 API |
+
+---
+
+## 动画完成（推荐用于业务收尾）
+
+系统 `withAnimation { } completion:` 的完成回调挂在**动画事务**上：同拍大重建可能掐断
+在飞动画，导致 completion 迟迟不来，把发奖 / 开按钮 / 弹窗队列等业务拖死。
+
+本库的完成信号盯的是 SwiftUI 逐帧推进的 `animatableData`——跟渲染走：
+
+- 动画被掐断、直接跳终点 → 立刻回调（不会挂死）
+- 主线程卡顿 → 跟着帧变慢（只会晚，不会早）
+
+### 简单场景（触发值 = 观察值）
+
+```swift
+@State private var token: CGFloat = 0
+
+var body: some View {
+    content
+        .stableAnimation(.easeInOut(duration: 0.25), value: token) {
+            // token 这一轮动画真画完了
+        }
+}
+
+func play() {
+    token += 1   // 不要包 withAnimation
+}
+```
+
+### 弹窗框架常见场景（一条曲线 + 多个进度）
+
+```swift
+content
+    .onAnimationCompleted(for: appearProgress) { handleAppearFinished() }
+    .onAnimationCompleted(for: dismissProgress) { handleDismissFinished() }
+    .animation(activeAnimation, value: animationToken)
+
+// 触发出场：
+activeAnimation = .easeInOut(duration: 0.25)
+animationToken += 1
+appearProgress += 1
+```
+
+### 硬规则（违反会立刻误报完成）
+
+1. 观察器挂在**常驻**视图上（不要挂在随弹窗内容一起插入/移除的那一层）
+2. 观察器必须在 `.animation(_:value:)` 的**内侧**（上游）
+
+> 不要做成全局自由函数去「伪装」`withAnimation { } completion:`——完成信号必须挂在视图树上，
+> 自由函数救不了事务被掐断的问题。
 
 `SwiftUIPlusLifecycleEvent` 定义：
 

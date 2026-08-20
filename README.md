@@ -1,12 +1,14 @@
 # SwiftUIPlus
 
-一个轻量的 SwiftUI 能力补全库，目前包含两块：
+一个轻量的 SwiftUI 能力补全库，目前包含四块：
 
 1. **生命周期**：桥接到 UIKit 真实 `UIViewController` 生命周期，提供
    `viewDidLoad / viewWillAppear / viewDidAppear / viewWillDisappear / viewDidDisappear`
    以及 SwiftUI 原生缺失的「视图真正被销毁」回调。
 2. **动画完成**：用 `Animatable` 跟随渲染插值，提供比 `withAnimation(_:completion:)`
    更适合承接业务逻辑的「动画真正画完」回调。
+3. **换行策略**：`lineBreakStyle` 把「单行 + 最小缩放」「限行数」「不限行数」三种常用文本策略收成一个修饰符。
+4. **整块缩放**：`shrinkToFit` 让图文混排的一整块内容超宽时等比缩小，而不是各段各缩。
 
 - 最低支持：**iOS 17**
 - 仅依赖 `SwiftUI` + `UIKit`，零第三方依赖
@@ -83,6 +85,42 @@ SomeView()
 | `onFirstAppear { }` | 首次 `onAppear` | 用内联 `@State` 去重，只触发一次 |
 | `onAnimationCompleted(for:) { }` | `animatableData` 到达终点 | 稳妥的动画完成信号；须挂在 `.animation` **内侧** |
 | `stableAnimation(_:value:) { }` | 同上 | `onAnimationCompleted` + `.animation` 的组合便捷 API |
+| `lineBreakStyle(_:)` | 布局期 | 单行 / 限行数 / 不限行数三种文本换行策略 |
+| `shrinkToFit(maxWidth:maxHeight:)` | 量到需求尺寸后 | 整块内容超宽/超高就等比缩小，只缩不放 |
+
+---
+
+## 整块缩放（图文混排超宽时用）
+
+`minimumScaleFactor` 是 `Text` 专属的排版特性：图标 / 形状不认识它，而且**每个 Text 各自**算缩放比。
+所以下面这种图文混排一超宽就会翻车——容器把可用宽度分摊给各段，长文案分到的少、缩得很狠，
+短数字分到的够用、几乎不缩，同一行里出现两种字号，图标还保持原大小：
+
+```swift
+// ❌ 各段各缩，字号不一致
+HStack { adIcon; Text(longTitle); coinIcon; Text("2000000") }
+    .lineBreakStyle(.oneLine(maxWidth: 200))
+```
+
+`shrinkToFit` 改成对整块做渲染变换，字号、图标、子视图间距同比缩小：
+
+```swift
+// ✅ 整块等比缩小，比例关系不变
+HStack(spacing: 2) { adIcon; Text(longTitle); coinIcon; Text("2000000") }
+    .shrinkToFit(maxWidth: 200)
+```
+
+实现是三步：`fixedSize()` 按需求尺寸排开 → `onGeometryChange` 量出这个尺寸 → `scaleEffect` 整块缩放，
+最后把对外的布局尺寸补成缩放后的尺寸，方便继续参与 `HStack` / `VStack` 排布。
+不存在测量回环：`scaleEffect` 不参与布局，`fixedSize` 又忽略父层提议，量到的需求尺寸恒定。
+
+### 注意
+
+1. 内部会加 `fixedSize()`，所以内容里**不要**再依赖父层宽度做自适应（内部的 `Spacer`、
+   `frame(maxWidth: .infinity)` 会失去意义）。
+2. 首帧还没量到尺寸，按原大小绘制，量到后重绘才带上缩放；不需要缩放的内容两趟结果一致。
+3. 文字是被变换缩小的，不是按更小字号重排，缩放比低于约 0.5 时会略微发虚；位图切图只缩不放
+   属于降采样，不受影响。
 
 ---
 

@@ -1,6 +1,6 @@
 # SwiftUIPlus
 
-一个轻量的 SwiftUI 能力补全库，目前包含四块：
+一个轻量的 SwiftUI 能力补全库，目前包含五块：
 
 1. **生命周期**：桥接到 UIKit 真实 `UIViewController` 生命周期，提供
    `viewDidLoad / viewWillAppear / viewDidAppear / viewWillDisappear / viewDidDisappear`
@@ -9,6 +9,8 @@
    更适合承接业务逻辑的「动画真正画完」回调。
 3. **换行策略**：`lineBreakStyle` 把「单行 + 最小缩放」「限行数」「不限行数」三种常用文本策略收成一个修饰符。
 4. **整块缩放**：`shrinkToFit` 让图文混排的一整块内容超宽时等比缩小，而不是各段各缩。
+5. **即时按下**：`TouchDownButton` / `onTouchDown` 用 UIKit `UIButton` 吃触摸，手指落下立刻回调，
+   不走 SwiftUI 在 ScrollView 里「先判断是点还是滚」的那一小段延迟。
 
 - 最低支持：**iOS 17**
 - 仅依赖 `SwiftUI` + `UIKit`，零第三方依赖
@@ -87,6 +89,7 @@ SomeView()
 | `stableAnimation(_:value:) { }` | 同上 | `onAnimationCompleted` + `.animation` 的组合便捷 API |
 | `lineBreakStyle(_:)` | 布局期 | 单行 / 限行数 / 不限行数三种文本换行策略 |
 | `shrinkToFit(maxWidth:maxHeight:)` | 量到需求尺寸后 | 整块内容超宽/超高就等比缩小，只缩不放 |
+| `TouchDownButton` / `onTouchDown(...)` | UIKit `.touchDown` 当下 | 按下立刻回调；松开分 inside / outside；滚动抢走触摸走 cancel |
 
 ---
 
@@ -121,6 +124,42 @@ HStack(spacing: 2) { adIcon; Text(longTitle); coinIcon; Text("2000000") }
 2. 首帧还没量到尺寸，按原大小绘制，量到后重绘才带上缩放；不需要缩放的内容两趟结果一致。
 3. 文字是被变换缩小的，不是按更小字号重排，缩放比低于约 0.5 时会略微发虚；位图切图只缩不放
    属于降采样，不受影响。
+
+---
+
+## 即时按下（按下立刻缩小、松开立刻复原）
+
+SwiftUI 的 `Button` / `onTapGesture` / `onLongPressGesture` 放进 `ScrollView` 后，系统要先仲裁
+「这是点击还是滚动」，按下反馈会慢一拍；用户点得快，缩放动画根本来不及出现。
+
+`TouchDownButton` 底层是透明 `UIButton`，走 `.touchDown` / `.touchUpInside` /
+`.touchUpOutside` / `.touchCancel`，手指落下当下就回调。
+
+常见用法是盖在已有卡片上，用按下态做 `scaleEffect`：
+
+```swift
+card
+    .scaleEffect(isPressed ? 0.96 : 1)
+    .onTouchDown {
+        isPressed = true
+    } onTouchUpInside: {
+        isPressed = false
+        submit()
+    } onTouchUpOutside: {
+        isPressed = false
+    } onTouchCancel: {
+        isPressed = false
+    }
+```
+
+也可以自己 `overlay { TouchDownButton(...) }`。它没有自身尺寸，必须盖在已有内容上，或先给 `.frame`。
+
+### 注意
+
+1. 热区上的 SwiftUI 手势会被这层 UIButton 吃掉。业务点击请写在 `onTouchUpInside`，不要再叠一层 `onTapGesture`。
+2. 按钮进层级后会把**最近外层** `UIScrollView.delaysContentTouches` 设为 `false`，否则 ScrollView 仍会扣住按下。
+   滚动本身还能把触摸抢走（走 `onTouchCancel`），只是不再拖延按下。
+3. `isExclusiveTouch = true`，同一时刻只有这一块吃触摸，避免两指同时按中两张卡。
 
 ---
 
